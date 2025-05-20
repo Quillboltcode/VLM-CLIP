@@ -2,7 +2,7 @@
 import torch
 from transformers.models.clip import CLIPModel
 import torch.nn as nn
-from adapter.peclip import TextualAdapter, TemporalDynamicAdapter, SharedAdapter
+from adapter.peclip import TextualAdapter, ContextAdapter, SharedAdapter
 
 
 class CLIPWithAdapters(nn.Module):
@@ -22,7 +22,7 @@ class CLIPWithAdapters(nn.Module):
 
         # Add adapters
         self.text_adapter = TextualAdapter(self.text_dim, adapter_dim)
-        self.video_adapter = TemporalDynamicAdapter(self.vision_dim, adapter_dim)
+        self.context_adapter = ContextAdapter(self.vision_dim, adapter_dim)
         self.shared_adapter = SharedAdapter(self.vision_dim, num_heads=8)
 
         # Similarity head
@@ -42,9 +42,9 @@ class CLIPWithAdapters(nn.Module):
 
         # Apply adapters
         adapted_text = self.text_adapter(text_emb)
-        adapted_video = self.video_adapter(video_emb)
+        adapted_image = self.context_adapter(video_emb)
         shared_text = self.shared_adapter(adapted_text)
-        shared_video = self.shared_adapter(adapted_video)
+        shared_video = self.shared_adapter(adapted_image)
 
         # Compute similarity
         combined = shared_text * shared_video
@@ -59,7 +59,7 @@ class CLIPWithAdapters(nn.Module):
         torch.save(
             {
                 "text_adapter": self.text_adapter.state_dict(),
-                "video_adapter": self.video_adapter.state_dict(),
+                "videcontext_adaptero_adapter": self.context_adapter.state_dict(),
                 "shared_adapter": self.shared_adapter.state_dict(),
                 "classifier": self.similarity_head.state_dict(),
             },
@@ -70,6 +70,6 @@ class CLIPWithAdapters(nn.Module):
         """Load only the adapter parameters."""
         checkpoint = torch.load(path)
         self.text_adapter.load_state_dict(checkpoint["text_adapter"])
-        self.video_adapter.load_state_dict(checkpoint["video_adapter"])
+        self.context_adapter.load_state_dict(checkpoint["context_adapter"])
         self.shared_adapter.load_state_dict(checkpoint["shared_adapter"])
         self.similarity_head.load_state_dict(checkpoint["classifier"])
