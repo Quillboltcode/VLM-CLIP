@@ -246,3 +246,10 @@ class CLIPWithAdapters(nn.Module):
 
         print(f"Adapter weights loaded from {load_path}")
         print(f"Loaded adapters: {list(adapter_state_dict.keys())}")
+
+if __name__ == "__main__":
+    # Example usage
+    model = CLIPWithAdapters()
+    print(model)
+    # Save adapter weights
+    model.save_adapter_weights("adapter_weights.pth")

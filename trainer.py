@@ -165,3 +165,50 @@ class CLIPAdapterTrainer:
         Load adapter weights from the specified path.
         """
         self.model.load_adapter_weights(f"{path}.pt")
+
+
+if __name__ == "__main__":
+    # Create a simple dummy dataset for testing
+    class DummyDataset(Dataset):
+        def __init__(self, size=100):
+            self.size = size
+
+        def __len__(self):
+            return self.size
+
+        def __getitem__(self, idx):
+            return {
+                "input_ids": torch.randint(0, 1000, (77,)),
+                "attention_mask": torch.ones(77),
+                "pixel_values": torch.randn(3, 224, 224),
+            }
+
+    # Create dummy dataloaders
+    train_dataset = DummyDataset()
+    train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+
+    # Initialize model
+    model = CLIPWithAdapters(
+        use_text_adapter=True,
+        use_vision_adapter=True,
+        use_shared_adapters=False,
+    )
+
+    # Initialize trainer
+    trainer = CLIPAdapterTrainer(
+        model=model,
+        train_dataloader=train_dataloader,
+        output_dir="./test_checkpoints",
+    )
+
+    # Test save functionality
+    print("Testing save functionality...")
+    trainer.save_model("./test_checkpoints/test_adapter")
+
+    # Test load functionality
+    print("Testing load functionality...")
+    trainer.load_model("./test_checkpoints/test_adapter")
+
+    print("Test completed successfully!")
+
+

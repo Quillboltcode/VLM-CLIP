@@ -10,7 +10,7 @@ model = CLIPWithAdapters(
     freeze_clip=True,
     use_text_adapter=True,
     use_vision_adapter=True,
-    use_shared_adapters=False,
+    use_shared_adapters=True,
 )
 
 # 2. Put model in eval mode
