@@ -38,6 +38,10 @@ class CLIPWithAdapters(nn.Module):
         self.use_vision_adapter = use_vision_adapter
         self.use_shared_adapters = use_shared_adapters
 
+        self.text_adapter = None
+        self.vision_adapter = None
+        self.shared_adapters = None
+
         # Add text adapter
         if self.use_text_adapter:
             self.text_adapter = TextAdapter(text_hidden_size, text_adapter_size)
