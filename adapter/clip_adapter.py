@@ -67,8 +67,17 @@ class TextAdapter(nn.Module):
 
 
 class SharedMHSAttentionAdapter(nn.Module):
-    def __init__(self, hidden_size, num_heads=8, dropout=0.1):
+    def __init__(
+        self,
+        text_input_size=512,
+        image_input_size=768,
+        hidden_size=512,
+        num_heads=8,
+        dropout=0.1,
+    ):
         super().__init__()
+        self.text_proj = nn.Linear(text_input_size, hidden_size)
+        self.image_proj = nn.Linear(image_input_size, hidden_size)
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=hidden_size,
             num_heads=num_heads,
@@ -88,6 +97,19 @@ class SharedMHSAttentionAdapter(nn.Module):
         )
 
     def forward(self, hidden_states, encoder_hidden_states):
+        """
+        Args:
+            hidden_states: Tensor of shape [B, T_text, 512]
+            encoder_hidden_states: Tensor of shape [B, T_image, 768]
+        """
+        # Project both modalities to the same hidden size
+        hidden_states = self.text_proj(
+            hidden_states
+        )  # [B, T_text, 512] -> [B, T_text, hidden_size]
+
+        encoder_hidden_states = self.image_proj(
+            encoder_hidden_states
+        )  # [B, T_image, 768] -> [B, T_image, hidden_size]
         # Norm before attention
         q = k = v = self.norm1(encoder_hidden_states)
         hidden_states = self.norm2(hidden_states)
@@ -126,3 +148,20 @@ class VisionAdapter(nn.Module):
         hidden_states = self.up_project(hidden_states)
         hidden_states = self.layer_norm(hidden_states + residual)
         return hidden_states
+
+
+if __name__ == "__main__":
+    import torch
+
+    adapter = SharedMHSAttentionAdapter(
+        text_input_size=512,  # From text encoder
+        image_input_size=768,  # From image encoder
+        hidden_size=512,  # Final shared dimension
+    )
+    # Sample inputs
+    text_features = torch.randn(1, 5, 512)  # [B, T_text, 512]
+    image_features = torch.randn(1, 50, 768)  # [B, T_image, 768]
+
+    # Apply adapter
+    output = adapter(text_features, image_features)
+    print(output.shape)  # Should be [1, 5, 512]

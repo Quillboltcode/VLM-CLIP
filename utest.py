@@ -1,8 +1,6 @@
 import torch
-from transformers.models.clip import CLIPConfig, CLIPVisionConfig
-from config import AdapterConfig
-from model import CLIPWithAdapters  # assuming your model file is named model.py
 
+from model import CLIPWithAdapters  # assuming your model file is named model.py
 
 model = CLIPWithAdapters(
     clip_model_name="openai/clip-vit-base-patch32",
@@ -10,6 +8,9 @@ model = CLIPWithAdapters(
     vision_adapter_size=256,
     shared_adapter_layers=2,
     freeze_clip=True,
+    use_text_adapter=True,
+    use_vision_adapter=True,
+    use_shared_adapters=False,
 )
 
 # 2. Put model in eval mode
@@ -20,11 +21,13 @@ processor = model.processor  # comes from CLIPWithAdapters
 
 # 4. Prepare dummy input
 from PIL import Image
-import requests
-from io import BytesIO
 
 image = Image.new("RGB", (224, 224), color="red")  # dummy red image
 text = "A red square"
+
+
+print(type(processor))
+print(hasattr(processor, "__call__"))
 
 inputs = processor(
     text=[text],

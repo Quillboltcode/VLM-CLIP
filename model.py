@@ -1,8 +1,8 @@
 # model.py
 import os
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn as nn
 from transformers.models.clip import CLIPModel, CLIPProcessor
 from adapter.clip_adapter import TextAdapter, VisionAdapter, SharedMHSAttentionAdapter
 
@@ -19,6 +19,9 @@ class CLIPWithAdapters(nn.Module):
         vision_adapter_size=256,
         shared_adapter_layers=2,
         freeze_clip=True,
+        use_text_adapter=True,
+        use_vision_adapter=True,
+        use_shared_adapters=True,
     ):
         super().__init__()
 
@@ -30,16 +33,25 @@ class CLIPWithAdapters(nn.Module):
         text_hidden_size = self.clip.text_model.config.hidden_size
         vision_hidden_size = self.clip.vision_model.config.hidden_size
 
+        # Set adapter flags
+        self.use_text_adapter = use_text_adapter
+        self.use_vision_adapter = use_vision_adapter
+        self.use_shared_adapters = use_shared_adapters
+
         # Add text adapter
-        self.text_adapter = TextAdapter(text_hidden_size, text_adapter_size)
+        if self.use_text_adapter:
+            self.text_adapter = TextAdapter(text_hidden_size, text_adapter_size)
 
         # Add vision adapter
-        self.vision_adapter = VisionAdapter(vision_hidden_size, vision_adapter_size)
+        if self.use_vision_adapter:
+            self.vision_adapter = VisionAdapter(vision_hidden_size, vision_adapter_size)
 
+        
         # Add shared cross-attention adapters
-        self.shared_adapters = nn.ModuleList(
+        if self.use_shared_adapters:
+            self.shared_adapters = nn.ModuleList(
             [
-                SharedMHSAttentionAdapter(text_hidden_size)
+                SharedMHSAttentionAdapter(text_hidden_size, vision_hidden_size)
                 for _ in range(shared_adapter_layers)
             ]
         )
@@ -69,17 +81,20 @@ class CLIPWithAdapters(nn.Module):
 
         # Process through text adapter
         text_features = text_outputs.last_hidden_state
-        text_features = self.text_adapter(text_features)
+        if self.use_text_adapter:
+            # Apply text adapter
+            text_features = self.text_adapter(text_features)
 
-        # Apply shared adapters: share cross-attention between text and image
-        image_features = (
-            self.clip.vision_model.embeddings.position_embedding.weight.unsqueeze(0)
-        )
-        for shared_adapter in self.shared_adapters:
-            text_features = shared_adapter(text_features, image_features)
 
-        # Apply CLIP's projection (this is needed to get the contrastive loss)
-        # We take the features corresponding to the [CLS] token
+
+        # Apply shared adapters if enabled
+        if self.use_shared_adapters:
+            image_features = (
+                self.clip.vision_model.embeddings.position_embedding.weight.unsqueeze(0)
+            )
+            for shared_adapter in self.shared_adapters:
+                text_features = shared_adapter(text_features, image_features)
+
         text_features = text_features[:, 0, :]
         text_features = self.clip.text_projection(text_features)
 
@@ -95,7 +110,8 @@ class CLIPWithAdapters(nn.Module):
 
         # Process through vision adapter
         image_features = vision_outputs.last_hidden_state
-        image_features = self.vision_adapter(image_features)
+        if self.use_vision_adapter:
+            image_features = self.vision_adapter(image_features)
 
         # Apply CLIP's projection (this is needed to get the contrastive loss)
         # We take the features corresponding to the [CLS] token
