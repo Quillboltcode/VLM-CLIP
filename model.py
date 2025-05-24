@@ -174,20 +174,40 @@ class CLIPWithAdapters(nn.Module):
     def save_adapter_weights(self, save_path):
         """
         Save only the adapter weights, keeping the original CLIP weights untouched.
+        
+        Args:
+            save_path: Path to save the adapter weights
         """
-        adapter_state_dict = {
-            "text_adapter": self.text_adapter.state_dict(),
-            "vision_adapter": self.vision_adapter.state_dict(),
-            "shared_adapters": self.shared_adapters.state_dict(),
-        }
+        adapter_state_dict = {}
+        
+        # Only save adapters that are enabled
+        if self.use_text_adapter:
+            adapter_state_dict["text_adapter"] = self.text_adapter.state_dict()
+        
+        if self.use_vision_adapter:
+            adapter_state_dict["vision_adapter"] = self.vision_adapter.state_dict()
+        
+        if self.use_shared_adapters:
+            adapter_state_dict["shared_adapters"] = self.shared_adapters.state_dict()
+        
+        if not adapter_state_dict:
+            raise ValueError("No adapters enabled to save")
 
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         torch.save(adapter_state_dict, save_path)
         print(f"Adapter weights saved to {save_path}")
+        print(f"Saved adapters: {list(adapter_state_dict.keys())}")
 
     def load_adapter_weights(self, load_path):
         """
         Load only the adapter weights, keeping the original CLIP weights untouched.
+        
+        Args:
+            load_path: Path to load the adapter weights from
+            
+        Raises:
+            FileNotFoundError: If the weights file doesn't exist
+            ValueError: If there's a mismatch between enabled adapters and saved weights
         """
         if not os.path.exists(load_path):
             raise FileNotFoundError(f"No adapter weights found at {load_path}")
@@ -196,8 +216,29 @@ class CLIPWithAdapters(nn.Module):
             load_path, map_location=next(self.parameters()).device
         )
 
-        self.text_adapter.load_state_dict(adapter_state_dict["text_adapter"])
-        self.vision_adapter.load_state_dict(adapter_state_dict["vision_adapter"])
-        self.shared_adapters.load_state_dict(adapter_state_dict["shared_adapters"])
+        # Validate and load text adapter
+        if "text_adapter" in adapter_state_dict:
+            if not self.use_text_adapter:
+                raise ValueError("Text adapter weights found but text adapter is not enabled")
+            self.text_adapter.load_state_dict(adapter_state_dict["text_adapter"])
+        elif self.use_text_adapter:
+            raise ValueError("Text adapter is enabled but no weights found in checkpoint")
+
+        # Validate and load vision adapter
+        if "vision_adapter" in adapter_state_dict:
+            if not self.use_vision_adapter:
+                raise ValueError("Vision adapter weights found but vision adapter is not enabled")
+            self.vision_adapter.load_state_dict(adapter_state_dict["vision_adapter"])
+        elif self.use_vision_adapter:
+            raise ValueError("Vision adapter is enabled but no weights found in checkpoint")
+
+        # Validate and load shared adapters
+        if "shared_adapters" in adapter_state_dict:
+            if not self.use_shared_adapters:
+                raise ValueError("Shared adapter weights found but shared adapters are not enabled")
+            self.shared_adapters.load_state_dict(adapter_state_dict["shared_adapters"])
+        elif self.use_shared_adapters:
+            raise ValueError("Shared adapters are enabled but no weights found in checkpoint")
 
         print(f"Adapter weights loaded from {load_path}")
+        print(f"Loaded adapters: {list(adapter_state_dict.keys())}")

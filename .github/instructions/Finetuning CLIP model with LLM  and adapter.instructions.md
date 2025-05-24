@@ -45,11 +45,7 @@ applyTo: '**/*.py'
    - Support batch processing
    - Enable gradient checkpointing when needed
 
-## Testing Requirements
-- Unit tests for all adapter components
-- Integration tests for the complete model
-- Test cases for different adapter configurations
-- Validation of saved/loaded adapter weights
+
 
 ## Dependencies
 - torch >= 1.10.0
@@ -86,9 +82,7 @@ project/
 │   └── utils.py         # Utility functions
 ├── config/
 │   └── adapter_config.py # Adapter configurations
-└── tests/
-    ├── test_model.py
-    └── test_adapters.py
+
 ```
 
 ## Additional Notes
