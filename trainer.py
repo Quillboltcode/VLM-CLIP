@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers.optimization import get_linear_schedule_with_warmup
 from tqdm import tqdm
 import numpy as np
-from model import CLIPWithAdapters
+from model_m import CLIPWithAdapters
 
 
 class CLIPAdapterTrainer:

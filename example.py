@@ -1,6 +1,6 @@
 import os
 import torch
-from model import CLIPWithAdapters
+from model_m import CLIPWithAdapters
 from dataset import create_dataloaders
 from trainer import CLIPAdapterTrainer
 from glob import glob

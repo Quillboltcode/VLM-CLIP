@@ -1,6 +1,6 @@
 import torch
 
-from model import CLIPWithAdapters  # assuming your model file is named model.py
+from model_m import CLIPWithAdapters  # assuming your model file is named model.py
 
 model = CLIPWithAdapters(
     clip_model_name="openai/clip-vit-base-patch32",

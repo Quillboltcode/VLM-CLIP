@@ -3,7 +3,7 @@
 import os
 import torch
 from transformers import CLIPProcessor
-from model import CLIPWithAdapters
+from model_m import CLIPWithAdapters
 from dataset import RAFDBDataset, create_dataloaders
 from trainer import CLIPAdapterTrainer
 from pathlib import Path

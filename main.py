@@ -1,256 +1,195 @@
 # main.py
-
-import os
 import torch
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from PIL import Image
+import torch.optim as optim
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+import torch.nn as nn
+import os
+import logging
+from datetime import datetime
 
-# Import from other modules
-import constants
-from data_utils import FolderDataset
-from model import CLIPAdapter, ZeroShotEmotionRecognition, device # Import device from model.py
-from evaluation import (
-    evaluate_model,
-    plot_confusion_matrix,
-    plot_class_similarities,
-    visualize_predictions
+# Import from your custom modules
+import config
+from model_v import EnhancedCLIPAdapter, VLMContextExtractor
+from dataset import EnhancedFolderDataset, EnhancedFolderDatasetWithContext
+from utils import evaluate_enhanced_model, display_results_with_contexts, analyze_context_quality
+
+# Create logs directory if it doesn't exist
+log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
+# Create a timestamp for the log file
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+log_file = os.path.join(log_dir, f'training_{timestamp}.log')
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()  # This will also print to console
+    ]
 )
 
-def test_single_image(model, image_path, use_all_descriptions=False):
-    """Test the model on a single image"""
+logger = logging.getLogger(__name__)
+logger.info("Starting Enhanced CLIP-Adapter workflow...")
 
-    # Load and preprocess image
-    try:
-        image = Image.open(image_path).convert('RGB')
-    except FileNotFoundError:
-        print(f"Error: Image file {image_path} not found.")
-        return None, None, None
+def train_model(model, train_loader, num_epochs, learning_rate, device):
+    """Trains the adapter layers of the EnhancedCLIPAdapter model."""
+    model.train() # Set model to training mode (affects dropout, etc.)
 
-    inputs = model.processor(
-        images=image,
-        return_tensors="pt",
-        padding=True
-    ).to(device)
+    # Ensure only adapter parameters are optimized
+    optimizer = optim.Adam(model.get_trainable_parameters(), lr=learning_rate)
 
-    # Get prediction
-    model.model.eval() # Ensure CLIP model is in eval mode
-    if hasattr(model, 'visual_adapter') and model.visual_adapter is not None:
-        model.visual_adapter.eval()
-    if hasattr(model, 'text_adapter') and model.text_adapter is not None:
-        model.text_adapter.eval()
+    criterion = nn.CrossEntropyLoss() # Standard loss for classification
 
+    for epoch in range(num_epochs):
+        total_loss = 0
+        batch_count = 0
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
 
-    with torch.no_grad():
-        if use_all_descriptions and hasattr(model, 'predict_with_all_descriptions'):
-            probs = model.predict_with_all_descriptions(inputs.pixel_values)[0]
-        else:
-            probs = model.predict(inputs.pixel_values)[0]
+        for pixel_values, labels, _, context_features in progress_bar:
+            pixel_values = pixel_values.to(device)
+            labels = labels.to(device)
+            context_features = context_features.to(device)
 
-        confidence, predicted = torch.max(probs, 0)
+            optimizer.zero_grad()
 
-    # Get emotion label
-    emotion = constants.EMOTIONS[predicted.item()]
+            # Forward pass through the model to get logits
+            # The model's forward method should handle the adapters internally
+            logits = model(pixel_values, context_features, use_adapters_for_training=True)
 
-    # Display image with prediction
-    plt.figure(figsize=(6, 8))
-    plt.imshow(image)
-    plt.title(f"Predicted: {emotion} ({confidence.item():.2f})")
-    plt.axis('off')
-    plt.show()
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
 
-    # Show emotion probabilities
-    plt.figure(figsize=(10, 5))
-    sns.barplot(x=constants.EMOTIONS, y=probs.cpu().numpy())
-    plt.title('Emotion Similarity Scores')
-    plt.ylabel('Similarity Score')
-    plt.xlabel('Emotion')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
+            total_loss += loss.item()
+            batch_count += 1
+            progress_bar.set_postfix({"Loss": f"{total_loss/batch_count:.4f}"})
 
-    # Print emotion probabilities
-    print("\nEmotion similarity scores:")
-    for i, emotion_name in enumerate(constants.EMOTIONS):
-        print(f"{emotion_name}: {probs[i].item():.4f}")
+        avg_loss = total_loss / batch_count
+        print(f"Epoch {epoch+1}/{num_epochs} - Average Training Loss: {avg_loss:.4f}")
+        logger.info(f"Epoch {epoch+1}/{num_epochs} - Average Training Loss: {avg_loss:.4f}")
 
-    # Print text descriptions used for the predicted emotion
-    print(f"\nText descriptions used for '{emotion}':")
-    if emotion in model.emotion_descriptions:
-        for i, desc in enumerate(model.emotion_descriptions[emotion]):
-            print(f"{i+1}. {desc}")
-    else:
-        print(f"No descriptions found for emotion: {emotion}")
+        # Update the adapted emotion embeddings after each epoch of training text_adapter
+        model.update_emotion_embeddings()
+
+    model.eval() # Set model back to evaluation mode after training
+    print("Training complete.")
 
 
-    return emotion, confidence.item(), probs.cpu().numpy()
+def main_enhanced_workflow():
+    print(f"Using device: {config.DEVICE}")
 
-def compare_models(clip_adapter, zero_shot_model, test_loader, use_all_descriptions=True):
-    """Compare the performance of CLIP-Adapter and Zero-Shot models with different description strategies"""
-
-    # Evaluate Zero-Shot model with averaged descriptions
-    print("\nEvaluating Zero-Shot model with averaged descriptions...")
-    zero_shot_results = evaluate_model(zero_shot_model, test_loader, use_all_descriptions=False)
-    zero_shot_accuracy = zero_shot_results[0]
-
-    # Evaluate Zero-Shot model with all descriptions
-    zero_shot_all_desc_accuracy = 0.0 # Initialize
-    if use_all_descriptions:
-        print("\nEvaluating Zero-Shot model with all descriptions...")
-        zero_shot_all_desc_results = evaluate_model(zero_shot_model, test_loader, use_all_descriptions=True)
-        zero_shot_all_desc_accuracy = zero_shot_all_desc_results[0]
-
-    # Evaluate CLIP-Adapter with averaged descriptions
-    print("\nEvaluating CLIP-Adapter with averaged descriptions...")
-    adapter_results = evaluate_model(clip_adapter, test_loader, use_all_descriptions=False)
-    adapter_accuracy = adapter_results[0]
-
-    # Evaluate CLIP-Adapter with all descriptions
-    adapter_all_desc_accuracy = 0.0 # Initialize
-    if use_all_descriptions:
-        print("\nEvaluating CLIP-Adapter with all descriptions...")
-        adapter_all_desc_results = evaluate_model(clip_adapter, test_loader, use_all_descriptions=True)
-        adapter_all_desc_accuracy = adapter_all_desc_results[0]
-
-    # Plot confusion matrices
-    if zero_shot_results[1] is not None and zero_shot_results[1].size > 0 :
-        plot_confusion_matrix(zero_shot_results[1], "Zero-Shot Confusion Matrix (Avg Descriptions)")
-    if use_all_descriptions and zero_shot_all_desc_results[1] is not None and zero_shot_all_desc_results[1].size > 0:
-        plot_confusion_matrix(zero_shot_all_desc_results[1], "Zero-Shot Confusion Matrix (All Descriptions)")
-    if adapter_results[1] is not None and adapter_results[1].size > 0:
-        plot_confusion_matrix(adapter_results[1], "CLIP-Adapter Confusion Matrix (Avg Descriptions)")
-    if use_all_descriptions and adapter_all_desc_results[1] is not None and adapter_all_desc_results[1].size > 0:
-        plot_confusion_matrix(adapter_all_desc_results[1], "CLIP-Adapter Confusion Matrix (All Descriptions)")
-
-    # Plot class similarities
-    plot_class_similarities(zero_shot_results[7], zero_shot_results[4], "Zero-Shot Similarity (Avg Descriptions)")
-    if use_all_descriptions:
-        plot_class_similarities(zero_shot_all_desc_results[7], zero_shot_all_desc_results[4], "Zero-Shot Similarity (All Descriptions)")
-    plot_class_similarities(adapter_results[7], adapter_results[4], "CLIP-Adapter Similarity (Avg Descriptions)")
-    if use_all_descriptions:
-        plot_class_similarities(adapter_all_desc_results[7], adapter_all_desc_results[4], "CLIP-Adapter Similarity (All Descriptions)")
-
-    # Visualize predictions
-    visualize_predictions(zero_shot_results[5], zero_shot_results[4], zero_shot_results[3], zero_shot_results[6],
-                        num_examples=5, title="Zero-Shot Predictions (Avg Descriptions)")
-    if use_all_descriptions:
-        visualize_predictions(zero_shot_all_desc_results[5], zero_shot_all_desc_results[4], zero_shot_all_desc_results[3],
-                            zero_shot_all_desc_results[6], num_examples=5, title="Zero-Shot Predictions (All Descriptions)")
-    visualize_predictions(adapter_results[5], adapter_results[4], adapter_results[3], adapter_results[6],
-                        num_examples=5, title="CLIP-Adapter Predictions (Avg Descriptions)")
-    if use_all_descriptions:
-        visualize_predictions(adapter_all_desc_results[5], adapter_all_desc_results[4], adapter_all_desc_results[3],
-                            adapter_all_desc_results[6], num_examples=5, title="CLIP-Adapter Predictions (All Descriptions)")
-
-    # Print results
-    print("\n=== Performance Comparison ===")
-    print(f"Zero-Shot Accuracy (Avg Descriptions): {zero_shot_accuracy:.4f}")
-    if use_all_descriptions:
-        print(f"Zero-Shot Accuracy (All Descriptions): {zero_shot_all_desc_accuracy:.4f}")
-    print(f"CLIP-Adapter Accuracy (Avg Descriptions): {adapter_accuracy:.4f}")
-    if use_all_descriptions:
-        print(f"CLIP-Adapter Accuracy (All Descriptions): {adapter_all_desc_accuracy:.4f}")
-
-    # Calculate improvements
-    print("\n=== Improvements ===")
-    print(f"Adapter vs Zero-Shot (Avg Descriptions): {(adapter_accuracy - zero_shot_accuracy) * 100:.2f}%")
-    if use_all_descriptions:
-        print(f"Adapter vs Zero-Shot (All Descriptions): {(adapter_all_desc_accuracy - zero_shot_all_desc_accuracy) * 100:.2f}%")
-        print(f"All Descriptions vs Avg (Zero-Shot): {(zero_shot_all_desc_accuracy - zero_shot_accuracy) * 100:.2f}%")
-        print(f"All Descriptions vs Avg (CLIP-Adapter): {(adapter_all_desc_accuracy - adapter_accuracy) * 100:.2f}%")
-        print(f"Best performance - CLIP-Adapter (All Descriptions): {adapter_all_desc_accuracy:.4f}")
-
-    print("\n=== Zero-Shot Classification Report (Avg Descriptions) ===")
-    print(zero_shot_results[2])
-
-    if use_all_descriptions:
-        print("\n=== Zero-Shot Classification Report (All Descriptions) ===")
-        print(zero_shot_all_desc_results[2])
-
-    print("\n=== CLIP-Adapter Classification Report (Avg Descriptions) ===")
-    print(adapter_results[2])
-
-    if use_all_descriptions:
-        print("\n=== CLIP-Adapter Classification Report (All Descriptions) ===")
-        print(adapter_all_desc_results[2])
-
-    # Return the results
-    results = {
-        "zero_shot_accuracy_avg": zero_shot_accuracy,
-        "adapter_accuracy_avg": adapter_accuracy
-    }
-
-    if use_all_descriptions:
-        results.update({
-            "zero_shot_accuracy_all": zero_shot_all_desc_accuracy,
-            "adapter_accuracy_all": adapter_all_desc_accuracy
-        })
-
-    return results
-
-
-def main():
-    print(f"Using device: {device}") # device is imported from model.py
-
-    # Initialize zero-shot emotion recognition model for comparison
-    print(f"Initializing zero-shot emotion recognition with {constants.MODEL_NAME}...")
-    zero_shot_model = ZeroShotEmotionRecognition(constants.MODEL_NAME)
-
-    # Initialize CLIP-Adapter model
-    print(f"Initializing CLIP-Adapter with {constants.MODEL_NAME}...")
-    clip_adapter = CLIPAdapter(
-        constants.MODEL_NAME,
-        alpha=constants.ALPHA,
-        beta=constants.BETA,
-        bottleneck_dim=constants.BOTTLENECK_DIM
+    # Initialize VLM Context Extractor (can be shared)
+    # This initializes the VLM and its associated CLIP model for encoding descriptions.
+    # It's done once and passed around to avoid re-loading heavy models.
+    print("Initializing VLM Context Extractor...")
+    logging.info("Initializing VLM Context Extractor...")
+    vlm_extractor = VLMContextExtractor(
+        model_name=config.VLM_MODEL_NAME,
+        device=config.DEVICE # Pass device to VLM extractor
     )
 
+    # Initialize Enhanced CLIP-Adapter
+    print("Initializing Enhanced CLIP-Adapter with VLM context...")
+    logging.info("Initializing Enhanced CLIP-Adapter with VLM context...")
+    enhanced_adapter_model = EnhancedCLIPAdapter(
+        clip_model_name=config.CLIP_MODEL_NAME,
+        alpha=config.ALPHA,
+        beta=config.BETA,
+        gamma=config.GAMMA,
+        bottleneck_dim=config.BOTTLENECK_DIM,
+        device=config.DEVICE,
+        vlm_context_extractor=vlm_extractor # Pass the pre-initialized extractor
+    )
+    enhanced_adapter_model.encode_emotion_descriptions(emotions=config.EMOTIONS)
+    enhanced_adapter_model.print_model_structure()
+
     # Create datasets
-    train_dataset = FolderDataset(constants.TRAIN_DIR, clip_adapter.processor, mode='train')
-    test_dataset = FolderDataset(constants.TEST_DIR, clip_adapter.processor, mode='test')
+    print("Creating enhanced datasets with VLM context extraction...")
+    # For training, we need context features but not necessarily the raw text.
+    train_dataset = EnhancedFolderDataset(
+        root_dir=config.TRAIN_DIR,
+        clip_processor=enhanced_adapter_model.processor, # Use CLIP processor from main model
+        vlm_context_extractor=vlm_extractor,
+        mode='train',
+        max_images=200, # Limit for faster example run, adjust as needed
+        emotions=config.EMOTIONS,
+        device=config.DEVICE
+    )
+    # For testing, we also want the raw context text for analysis.
+    test_dataset = EnhancedFolderDatasetWithContext(
+        root_dir=config.TEST_DIR,
+        clip_processor=enhanced_adapter_model.processor,
+        vlm_context_extractor=vlm_extractor,
+        mode='test',
+        max_images=50, # Limit for faster example run
+        emotions=config.EMOTIONS,
+        device=config.DEVICE
+    )
 
-    # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=constants.BATCH_SIZE, shuffle=True, num_workers=2)
-    test_loader = DataLoader(test_dataset, batch_size=constants.BATCH_SIZE, num_workers=2)
+    if not train_dataset or not test_dataset or len(train_dataset) == 0 or len(test_dataset) == 0:
+        print("Failed to load datasets or datasets are empty. Please check paths and data.")
+        return
 
-    print(f"Train set: {len(train_dataset)} samples")
-    print(f"Test set: {len(test_dataset)} samples")
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, num_workers=0) # num_workers > 0 can speed up
+    test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False, num_workers=0)
 
-    # Train CLIP-Adapter
-    if len(train_dataset) > 0 :
-        print("Training CLIP-Adapter...")
-        clip_adapter.train(train_loader, num_epochs=constants.NUM_EPOCHS, learning_rate=constants.LEARNING_RATE)
-    else:
-        print("Skipping training as train dataset is empty.")
+    print(f"Train set: {len(train_dataset)} samples, {len(train_loader)} batches")
+    print(f"Test set: {len(test_dataset)} samples, {len(test_loader)} batches")
+
+    # Train the model
+    print("Training Enhanced CLIP-Adapter...")
+    train_model(
+        enhanced_adapter_model,
+        train_loader,
+        num_epochs=config.NUM_EPOCHS,
+        learning_rate=config.LEARNING_RATE,
+        device=config.DEVICE
+    )
+
+    # Save the trained adapter weights (optional)
+    torch.save({
+        'visual_adapter_state_dict': enhanced_adapter_model.visual_adapter.state_dict(),
+        'text_adapter_state_dict': enhanced_adapter_model.text_adapter.state_dict(),
+        'context_adapter_state_dict': enhanced_adapter_model.context_adapter.state_dict(),
+    }, "enhanced_adapters_weights.pth")
+    logging.info("Trained adapter weights saved to enhanced_adapters_weights.pth")
+    # print("Trained adapter weights saved to enhanced_adapters_weights.pth")
 
 
-    # Compare models with and without all descriptions
-    if len(test_dataset) > 0:
-        results = compare_models(clip_adapter, zero_shot_model, test_loader, use_all_descriptions=True)
-    else:
-        print("Skipping model comparison as test dataset is empty.")
+    # Evaluate the model
+    print("Evaluating Enhanced CLIP-Adapter...")
+    # The model should be in eval mode after training, but ensure it.
+    enhanced_adapter_model.eval()
+    # Ensure adapted emotion embeddings are up-to-date for evaluation
+    enhanced_adapter_model.update_emotion_embeddings()
 
+    evaluation_results = evaluate_enhanced_model(
+        enhanced_adapter_model,
+        test_loader,
+        device=config.DEVICE,
+        emotions=config.EMOTIONS
+    )
 
-    # Option to test on single image
-    test_image_prompt = input("Do you want to test on a single image? (y/n): ")
-    if test_image_prompt.lower() == 'y':
-        image_path = input("Enter path to image: ")
-        if os.path.exists(image_path):
-            print("\n=== Testing Zero-Shot (Averaged Descriptions) on single image ===")
-            test_single_image(zero_shot_model, image_path, use_all_descriptions=False)
+    # Display comprehensive results
+    display_results_with_contexts(
+        evaluation_results,
+        emotions=config.EMOTIONS,
+        num_samples_per_class=config.NUM_SAMPLES_TO_DISPLAY_PER_CLASS
+    )
 
-            print("\n=== Testing Zero-Shot (All Descriptions) on single image ===")
-            test_single_image(zero_shot_model, image_path, use_all_descriptions=True)
-
-            print("\n=== Testing CLIP-Adapter (Averaged Descriptions) on single image ===")
-            test_single_image(clip_adapter, image_path, use_all_descriptions=False)
-
-            print("\n=== Testing CLIP-Adapter (All Descriptions) on single image ===")
-            test_single_image(clip_adapter, image_path, use_all_descriptions=True)
-        else:
-            print(f"Error: Image file {image_path} not found.")
+    # Analyze context quality from the evaluation results
+    # evaluation_results tuple: (accuracy, conf_matrix, class_report, all_preds, all_labels,
+    #                            all_image_paths, all_confidences, all_similarity_scores, all_contexts_text)
+    # all_contexts_text is at index 8, all_labels is at index 4
+    analyze_context_quality(
+        all_contexts_text=evaluation_results[8],
+        all_labels=evaluation_results[4],
+        emotions=config.EMOTIONS
+    )
 
 if __name__ == "__main__":
-    main()
+    main_enhanced_workflow()
