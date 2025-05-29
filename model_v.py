@@ -68,6 +68,8 @@ class VLMContextExtractor:
         # CLIP for encoding text descriptions (can be part of EnhancedCLIPAdapter too if preferred)
         self.clip_model = CLIPModel.from_pretrained(config.CLIP_MODEL_NAME)
         self.clip_processor = CLIPProcessor.from_pretrained(config.CLIP_MODEL_NAME)
+        self.clip_model = self.clip_model.to(self.device)
+
         for param in self.clip_model.parameters():
             param.requires_grad = False
 

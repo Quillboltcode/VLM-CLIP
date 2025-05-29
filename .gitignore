@@ -9,3 +9,17 @@ wheels/
 # Virtual environments
 .venv
 .github/
+
+test_checkpoints/*
+data/
+# Ignore SLURM output and error logs
+*.out
+*.err
+slurm-*.out
+# Ignore temporary files
+*.tmp
+*.log
+# Ignore model checkpoints
+*.ckpt
+*.pt
+*.pth
